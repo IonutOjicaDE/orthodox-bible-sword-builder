@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'sources/biblia.xml'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -23,7 +24,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
 
@@ -80,7 +81,7 @@ jobs:
           retention-days: 30
 
       - name: Create GitHub release
-        if: success()
+        if: success() && github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
