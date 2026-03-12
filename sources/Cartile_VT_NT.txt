@@ -1,0 +1,82 @@
+
+In fisierul VT_NT_UTF8.txt am urmatoarele carti:
+Facerea – Întâia carte a lui Moise
+Ieşirea – A doua carte a lui Moise
+Leviticul – A treia carte a lui Moise
+Numerii – A patra carte a lui Moise
+Cartea lui Iosua Navi
+Cartea Judecătorilor
+Cartea Rut
+Cartea întâi a Regilor
+Cartea a doua a Regilor
+Cartea a treia a Regilor
+Cartea a patra a Regilor
+Cartea întâia Paralipomena sau cartea întâi a Cronicilor
+Cartea a doua Paralipomena sau cartea a doua a Cronicilor
+Cartea întâi a lui Ezdra
+Cartea lui Neemia sau a doua Ezdra
+Cartea Esterei
+Cartea lui Iov
+Psalmii
+Pildele lui Solomon
+Ecclesiastul
+Cântarea Cântărilor
+Isaia
+Ieremia
+Plângerile lui Ieremia
+Iezechiel
+Daniel
+Osea
+Amos
+Miheia
+Ioil
+Avdie
+Iona
+Naum
+Avacum
+Sofonie
+Agheu
+Zaharia
+Maleahi
+Cartea lui Tobit
+Cartea Iuditei
+Cartea lui Baruh
+Epistola lui Ieremia
+Cântarea celor trei tineri
+Cartea a treia a lui Ezdra
+Cartea întelepciunii lui Solomon
+Cartea întelepciunii lui Isus fiul lui Sirah (Eclesiasticul)
+Istoria Susanei
+Istoria omorârii balaurului şi a sfarâmării lui Bel
+Cartea întâia a Macabeilor
+Cartea a doua a Macabeilor
+Cartea a treia a Macabeilor
+Rugăciunea regelui Manase
+
+Sfânta Evanghelie după Matei
+Sfânta Evanghelie după Marcu
+Sfânta Evanghelie după Luca
+Sfânta Evanghelie după Ioan
+Faptele Sfinţilor Apostoli
+Epistola către Romani a Sfantului Apostol Pavel
+Epistola întâia către Corinteni a Sfântului Apostol Pavel
+Epistola a doua către Corinteni a Sfântului Apostol Pavel
+Epistola către Galateni a Sfântului Apostol Pavel
+Epistola către Efeseni a Sfântului Apostol Pavel
+Epistola către Filipeni a Sfântului Apostol Pavel
+Epistola către Coloseni a Sfântului Apostol Pavel
+Epistola întâia către Tesaloniceni a Sfântului Apostol Pavel
+Epistola a doua către Tesaloniceni a Sfântului Apostol Pavel
+Epistola întâia către Timotei a Sfântului Apostol Pavel
+Epistola a doua către Timotei a Sfântului Apostol Pavel
+Epistola către Tit a Sfântului Apostol Pavel
+Epistola către Filimon a Sfântului Apostol Pavel
+Epistola către Evrei a Sfântului Apostol Pavel
+Epistola Sobornicească a Sfântului Apostol Iacov
+Întâia Epistolă Sobornicească a Sfântului Apostol Petru
+A doua Epistolă Sobornicească a Sfântului Apostol Petru
+Întâia Epistolă Sobornicească a Sfântului Apostol Ioan
+A doua Epistolă Sobornicească a Sfântului Apostol Ioan
+A treia Epistolă Sobornicească a Sfântului Apostol Ioan
+Epistola Sobornicească a Sfântului Apostol Iuda
+Apocalipsa Sfântului Ioan Teologul
