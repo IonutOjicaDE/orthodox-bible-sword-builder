@@ -1,0 +1,92 @@
+name: Build and release SWORD on XML update
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'sources/biblia.xml'
+
+permissions:
+  contents: write
+
+env:
+  XML_PATH: sources/biblia.xml
+  MODULE_CONF_PATH: mods.d/roorthodox_exp.conf
+  MODULE_DATA_PATH: build/sword/modules/texts/ztext/roorthodox_exp
+  LOG_DIR: build/logs
+  RELEASE_ARCHIVE: sword-module.tar.gz
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install SWORD tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsword-utils
+
+      - name: Validate required files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [ ! -f "$XML_PATH" ]; then
+            echo "Missing XML file: $XML_PATH"
+            exit 1
+          fi
+
+          if [ ! -f "$MODULE_CONF_PATH" ]; then
+            echo "Missing module conf file: $MODULE_CONF_PATH"
+            exit 1
+          fi
+
+      - name: Prepare folders
+        run: |
+          mkdir -p "$MODULE_DATA_PATH"
+          mkdir -p "$LOG_DIR"
+          mkdir -p build/sword/mods.d
+
+      - name: Build SWORD module and capture log
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          osis2mod "$MODULE_DATA_PATH" "$XML_PATH" -z z -b 4 -v Orthodox 2>&1 | tee "$LOG_DIR/osis2mod.log"
+
+      - name: Copy module conf
+        run: |
+          cp "$MODULE_CONF_PATH" build/sword/mods.d/
+
+      - name: Pack release archive
+        shell: bash
+        run: |
+          tar -czf "build/$RELEASE_ARCHIVE" -C build sword
+
+      - name: Upload build log and archive
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sword-build-${{ github.run_number }}
+          path: |
+            build/${{ env.RELEASE_ARCHIVE }}
+            ${{ env.LOG_DIR }}/osis2mod.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Create GitHub release
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="xml-$(date -u +'%Y%m%d-%H%M%S')-${GITHUB_SHA::7}"
+          gh release create "$TAG" \
+            "build/$RELEASE_ARCHIVE" \
+            --title "Automatic XML build $TAG" \
+            --notes "Release generated automatically after an XML update."
