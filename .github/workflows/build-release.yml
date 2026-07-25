@@ -288,6 +288,6 @@ jobs:
             "build/$RELEASE_ARCHIVE" \
             "build/$RELEASE_ARCHIVE.sha256" \
             --target "$GITHUB_SHA" \
-            --title "ROOrthodox experimental $MODULE_VERSION" \
+            --title "Release $MODULE_VERSION" \
             --notes "SWORD module generated automatically from sources/biblia.xml." \
-            --prerelease
+            --latest
