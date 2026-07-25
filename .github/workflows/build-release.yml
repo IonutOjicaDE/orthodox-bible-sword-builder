@@ -5,33 +5,46 @@ on:
     branches:
       - main
     paths:
-      - 'sources/biblia.xml'
+      - sources/biblia.xml
 
   workflow_dispatch:
     inputs:
       publish_release:
-        description: 'Publică și un GitHub Release?'
+        description: Publică și un GitHub Release?
         required: true
         default: false
         type: boolean
+
+      replace_existing_release:
+        description: Înlocuiește Release-ul dacă versiunea există deja?
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: sword-build-release
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 env:
   MODULE_ID: ROOrthodox_exp
+  MODULE_SLUG: roorthodox_exp
   XML_PATH: sources/biblia.xml
   MODULE_CONF_PATH: mods.d/roorthodox_exp.conf
-
   SWORD_ROOT: build/sword
-  MODULE_DATA_PATH: build/sword/modules/texts/ztext/roorthodox_exp
   LOG_DIR: build/logs
-
   RELEASE_ARCHIVE: roorthodox_exp-sword.zip
 
 jobs:
   build-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Check out repository
@@ -39,45 +52,35 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install SWORD and archive tools
-        shell: bash
+      - name: Install build tools
         run: |
-          set -Eeuo pipefail
-
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             libsword-utils \
             diatheke \
-            zip \
-            unzip
+            libxml2-utils \
+            zip
 
-          echo "Installed SWORD tools:"
-          command -v osis2mod
-          command -v diatheke
-          osis2mod --help 2>&1 | head -n 5 || true
-          diatheke 2>&1 | head -n 10 || true
-
-      - name: Validate source files and configuration
-        shell: bash
+      - name: Validate sources and configuration
         run: |
-          set -Eeuo pipefail
-
-          if [ ! -f "$XML_PATH" ]; then
+          test -f "$XML_PATH" || {
             echo "Missing XML file: $XML_PATH"
             exit 1
-          fi
+          }
 
-          if [ ! -f "$MODULE_CONF_PATH" ]; then
+          test -f "$MODULE_CONF_PATH" || {
             echo "Missing module conf file: $MODULE_CONF_PATH"
             exit 1
-          fi
+          }
 
-          if ! grep -Fxq "[$MODULE_ID]" "$MODULE_CONF_PATH"; then
-            echo "The module identifier [$MODULE_ID] was not found."
+          FIRST_LINE="$(head -n 1 "$MODULE_CONF_PATH" | tr -d '\r')"
+          EXPECTED_DATA_PATH="DataPath=./modules/texts/ztext/${MODULE_SLUG}/"
+          MODULE_VERSION="$(sed -n 's/^Version=//p' "$MODULE_CONF_PATH" | head -n 1 | tr -d '\r')"
+
+          if [[ "$FIRST_LINE" != "[$MODULE_ID]" ]]; then
+            echo "Expected module identifier [$MODULE_ID], found: $FIRST_LINE"
             exit 1
           fi
-
-          EXPECTED_DATA_PATH='DataPath=./modules/texts/ztext/roorthodox_exp/'
 
           if ! grep -Fxq "$EXPECTED_DATA_PATH" "$MODULE_CONF_PATH"; then
             echo "Incorrect or missing DataPath."
@@ -85,22 +88,87 @@ jobs:
             exit 1
           fi
 
+          if ! grep -Fxq 'Versification=Orthodox' "$MODULE_CONF_PATH"; then
+            echo "Expected Versification=Orthodox"
+            exit 1
+          fi
+
+          if [[ ! "$MODULE_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+            echo "Invalid or missing Version: $MODULE_VERSION"
+            echo "Use a numeric version such as 1.0, 1.1 or 1.1.1."
+            exit 1
+          fi
+
+          xmllint --noout "$XML_PATH"
+
+          {
+            echo "MODULE_VERSION=$MODULE_VERSION"
+            echo "RELEASE_TAG=v$MODULE_VERSION"
+            echo "MODULE_DATA_PATH=$SWORD_ROOT/modules/texts/ztext/$MODULE_SLUG"
+            echo "CONF_TARGET=$SWORD_ROOT/mods.d/$MODULE_SLUG.conf"
+          } >> "$GITHUB_ENV"
+
+      - name: Read module version
+        run: |
+          MODULE_VERSION="$(
+            sed -n 's/^Version=//p' "$MODULE_CONF_PATH" |
+            head -n 1 |
+            tr -d '\r'
+          )"
+
+          if [ -z "$MODULE_VERSION" ]; then
+            echo "::error::Version is missing from $MODULE_CONF_PATH"
+            exit 1
+          fi
+
+          RELEASE_TAG="v${MODULE_VERSION}"
+
+          echo "MODULE_VERSION=$MODULE_VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+
+          echo "Module version: $MODULE_VERSION"
+          echo "Release tag: $RELEASE_TAG"
+
+      - name: Check release version policy
+        id: release_policy
+        if: ${{ github.event_name == 'push' || inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPLACE_REQUESTED: >-
+            ${{ github.event_name == 'workflow_dispatch'
+                && inputs.replace_existing_release }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG does not exist."
+            echo "replace=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Release $RELEASE_TAG already exists."
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            echo "::error::Release $RELEASE_TAG already exists."
+            echo "::error::Increase Version= in $MODULE_CONF_PATH before pushing the XML."
+            exit 1
+          fi
+
+          if [ "$REPLACE_REQUESTED" != "true" ]; then
+            echo "::error::Release $RELEASE_TAG already exists."
+            echo "::error::Increase Version= or run manually with replacement enabled."
+            exit 1
+          fi
+
+          echo "::warning::Release $RELEASE_TAG will be replaced after a successful build."
+          echo "replace=true" >> "$GITHUB_OUTPUT"
+
       - name: Prepare build folders
-        shell: bash
         run: |
-          set -Eeuo pipefail
-
           rm -rf build
+          mkdir -p "$MODULE_DATA_PATH" "$SWORD_ROOT/mods.d" "$LOG_DIR"
 
-          mkdir -p "$MODULE_DATA_PATH"
-          mkdir -p "$SWORD_ROOT/mods.d"
-          mkdir -p "$LOG_DIR"
-
-      - name: Build SWORD module and capture log
-        shell: bash
+      - name: Build SWORD module
         run: |
-          set -Eeuo pipefail
-
           osis2mod \
             "$MODULE_DATA_PATH" \
             "$XML_PATH" \
@@ -109,20 +177,10 @@ jobs:
             -v Orthodox \
             2>&1 | tee "$LOG_DIR/osis2mod.log"
 
-      - name: Copy and version module configuration
-        shell: bash
+      - name: Prepare module configuration
         run: |
-          set -Eeuo pipefail
-
-          CONF_TARGET="$SWORD_ROOT/mods.d/roorthodox_exp.conf"
-          MODULE_VERSION="1.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
           BUILD_DATE="$(date -u +'%Y-%m-%d')"
-
           cp "$MODULE_CONF_PATH" "$CONF_TARGET"
-
-          sed -i -E \
-            "s/^Version=.*/Version=${MODULE_VERSION}/" \
-            "$CONF_TARGET"
 
           if grep -q '^SwordVersionDate=' "$CONF_TARGET"; then
             sed -i -E \
@@ -132,78 +190,61 @@ jobs:
             printf '\nSwordVersionDate=%s\n' "$BUILD_DATE" >> "$CONF_TARGET"
           fi
 
-          echo "MODULE_VERSION=$MODULE_VERSION" >> "$GITHUB_ENV"
+          echo "Generated configuration summary:"
+          grep -E '^(Version|SwordVersionDate|DataPath|Versification)=' "$CONF_TARGET"
 
-          echo "Generated configuration:"
-          cat "$CONF_TARGET"
-
-      - name: Inspect generated files
-        shell: bash
+      - name: Verify generated module files
         run: |
-          set -Eeuo pipefail
+          FILE_COUNT="$(find "$MODULE_DATA_PATH" -type f | wc -l)"
 
-          echo "Generated SWORD structure:"
-          find "$SWORD_ROOT" -type f -print | sort
-
-          if ! find "$MODULE_DATA_PATH" -type f -print -quit | grep -q .; then
+          if (( FILE_COUNT == 0 )); then
             echo "osis2mod did not generate any module files."
             exit 1
           fi
 
-      - name: Test module with Diatheke
-        shell: bash
-        run: |
-          set -Eeuo pipefail
+          echo "Generated module files: $FILE_COUNT"
+          du -sh "$MODULE_DATA_PATH"
 
+      - name: Test module with Diatheke
+        run: |
           export SWORD_PATH="$GITHUB_WORKSPACE/$SWORD_ROOT"
 
-          echo "SWORD_PATH=$SWORD_PATH"
-          echo "Available configuration files:"
-          find "$SWORD_PATH/mods.d" -maxdepth 1 -type f -print
-
-          echo "Modules detected by SWORD:"
           diatheke -b system -k modulelist \
             2>&1 | tee "$LOG_DIR/module-list.log"
 
           if ! grep -Fqi "$MODULE_ID" "$LOG_DIR/module-list.log"; then
-            echo "ERROR: Module $MODULE_ID was not detected by the SWORD engine."
-            echo "Contents of the generated configuration:"
-            cat "$SWORD_PATH/mods.d/roorthodox_exp.conf"
+            echo "Module $MODULE_ID was not detected by the SWORD engine."
             exit 1
           fi
 
-          echo "Testing Genesis 1:1:"
           diatheke \
             -b "$MODULE_ID" \
             -f plain \
             -e UTF8 \
-            -k "Gen 1:1" \
+            -k 'Gen 1:1' \
             2>&1 | tee "$LOG_DIR/smoke-test.log"
 
-          if [ ! -s "$LOG_DIR/smoke-test.log" ]; then
-            echo "ERROR: The smoke test returned no output."
+          test -s "$LOG_DIR/smoke-test.log" || {
+            echo "The smoke test returned no output."
             exit 1
-          fi
+          }
 
       - name: Create installable SWORD ZIP
-        shell: bash
         run: |
-          set -Eeuo pipefail
-
           (
             cd "$SWORD_ROOT"
-            zip -r "../$RELEASE_ARCHIVE" mods.d modules
+            zip -qr "../$RELEASE_ARCHIVE" mods.d modules
           )
 
-          echo "Archive contents:"
-          unzip -l "build/$RELEASE_ARCHIVE"
+          zip -T "build/$RELEASE_ARCHIVE"
+          sha256sum "build/$RELEASE_ARCHIVE" > "build/$RELEASE_ARCHIVE.sha256"
 
       - name: Upload installable module
-        if: success()
         uses: actions/upload-artifact@v7
         with:
           path: build/${{ env.RELEASE_ARCHIVE }}
           archive: false
+          if-no-files-found: error
           retention-days: 30
 
       - name: Upload diagnostic logs
@@ -215,17 +256,38 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Create GitHub Release
-        if: ${{ success() && (github.event_name == 'push' || inputs.publish_release) }}
+      - name: Remove existing release for manual replacement
+        if: >-
+          ${{
+            success()
+            && github.event_name == 'workflow_dispatch'
+            && inputs.publish_release
+            && steps.release_policy.outputs.replace == 'true'
+          }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
         run: |
-          set -Eeuo pipefail
+          echo "Removing existing release and tag: $RELEASE_TAG"
+          gh release delete "$RELEASE_TAG" \
+            --cleanup-tag \
+            --yes
 
-          TAG="xml-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA::7}"
-
-          gh release create "$TAG" \
+      - name: Create GitHub Release
+        if: >-
+          ${{
+            success()
+            && (
+              github.event_name == 'push'
+              || inputs.publish_release
+            )
+          }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$RELEASE_TAG" \
             "build/$RELEASE_ARCHIVE" \
-            --title "ROOrthodox experimental ${MODULE_VERSION}" \
-            --notes "SWORD module generated automatically from sources/biblia.xml."
+            "build/$RELEASE_ARCHIVE.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "ROOrthodox experimental $MODULE_VERSION" \
+            --notes "SWORD module generated automatically from sources/biblia.xml." \
+            --prerelease
