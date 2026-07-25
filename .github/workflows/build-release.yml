@@ -45,7 +45,17 @@ jobs:
           set -Eeuo pipefail
 
           sudo apt-get update
-          sudo apt-get install -y libsword-utils zip unzip
+          sudo apt-get install -y \
+            libsword-utils \
+            diatheke \
+            zip \
+            unzip
+
+          echo "Installed SWORD tools:"
+          command -v osis2mod
+          command -v diatheke
+          osis2mod --help 2>&1 | head -n 5 || true
+          diatheke 2>&1 | head -n 10 || true
 
       - name: Validate source files and configuration
         shell: bash
@@ -145,20 +155,35 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          export SWORD_PATH="$SWORD_ROOT"
+          export SWORD_PATH="$GITHUB_WORKSPACE/$SWORD_ROOT"
 
+          echo "SWORD_PATH=$SWORD_PATH"
+          echo "Available configuration files:"
+          find "$SWORD_PATH/mods.d" -maxdepth 1 -type f -print
+
+          echo "Modules detected by SWORD:"
           diatheke -b system -k modulelist \
             2>&1 | tee "$LOG_DIR/module-list.log"
 
-          if ! grep -qi "$MODULE_ID" "$LOG_DIR/module-list.log"; then
-            echo "The generated module was not detected by the SWORD engine."
+          if ! grep -Fqi "$MODULE_ID" "$LOG_DIR/module-list.log"; then
+            echo "ERROR: Module $MODULE_ID was not detected by the SWORD engine."
+            echo "Contents of the generated configuration:"
+            cat "$SWORD_PATH/mods.d/roorthodox_exp.conf"
             exit 1
           fi
 
+          echo "Testing Genesis 1:1:"
           diatheke \
             -b "$MODULE_ID" \
+            -f plain \
+            -e UTF8 \
             -k "Gen 1:1" \
             2>&1 | tee "$LOG_DIR/smoke-test.log"
+
+          if [ ! -s "$LOG_DIR/smoke-test.log" ]; then
+            echo "ERROR: The smoke test returned no output."
+            exit 1
+          fi
 
       - name: Create installable SWORD ZIP
         shell: bash
