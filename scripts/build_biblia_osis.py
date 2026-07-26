@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import os
 import re
 import sys
 import unicodedata
@@ -64,8 +65,8 @@ VT_BOOK_MAP: dict[str, str] = {'Facerea – Întâia carte a lui Moise': 'Gen',
  'Epistola lui Ieremia': 'EpJer',
  'Cântarea celor trei tineri': 'PrAzar',
  'Cartea a treia a lui Ezdra': '1Esd',
- 'Cartea înţelepciunii lui Solomon': 'Wis',
- 'Cartea înţelepciunii lui Isus fiul lui Sirah (Eclesiasticul)': 'Sir',
+ 'Cartea înțelepciunii lui Solomon': 'Wis',
+ 'Cartea înțelepciunii lui Isus fiul lui Sirah (Eclesiasticul)': 'Sir',
  'Istoria Susanei': 'Sus',
  'Istoria omorârii balaurului şi a sfărâmării lui Bel': 'Bel',
  'Cartea întâia a Macabeilor': '1Macc',
@@ -76,7 +77,7 @@ NT_BOOK_MAP: dict[str, str] = {'Sfânta Evanghelie după Matei': 'Matt',
  'Sfânta Evanghelie după Marcu': 'Mark',
  'Sfânta Evanghelie după Luca': 'Luke',
  'Sfânta Evanghelie după Ioan': 'John',
- 'Faptele Sfinţilor Apostoli': 'Acts',
+ 'Faptele Sfinților Apostoli': 'Acts',
  'Epistola către Romani a Sfantului Apostol Pavel': 'Rom',
  'Epistola întâia către Corinteni a Sfântului Apostol Pavel': '1Cor',
  'Epistola a doua către Corinteni a Sfântului Apostol Pavel': '2Cor',
@@ -107,6 +108,8 @@ class ConversionStats:
     chapters: int
     verses: int
     section_titles: int
+    warnings: int
+    skipped_lines: int
 
 
 def normalize_text(value: str) -> str:
@@ -114,17 +117,52 @@ def normalize_text(value: str) -> str:
     return unicodedata.normalize("NFC", value.strip())
 
 
+def normalize_book_key(value: str) -> str:
+    """Normalize Romanian legacy diacritics, dash variants and whitespace for lookup."""
+    value = normalize_text(value).translate(
+        str.maketrans({"ş": "ș", "Ş": "Ș", "ţ": "ț", "Ţ": "Ț"})
+    )
+    value = value.replace("\u00a0", " ")
+    value = re.sub(r"\s+", " ", value)
+    value = re.sub(r"\s*[‐‑‒–—―-]\s*", " - ", value)
+    return value.casefold()
+
+
 def xml_escape(value: str) -> str:
     return html.escape(value, quote=False)
+
+
+def emit_warning(input_path: Path, line_number: int, message: str) -> None:
+    location = f"{input_path}:{line_number}"
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        safe_message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(
+            f"::warning file={input_path},line={line_number}::{safe_message}",
+            file=sys.stderr,
+        )
+    else:
+        print(f"ATENȚIONARE: {location}: {message}", file=sys.stderr)
 
 
 def convert_testament(
     input_path: Path,
     book_map: Mapping[str, str],
     subtype: str,
+    *,
+    lenient: bool,
 ) -> tuple[list[str], ConversionStats]:
     if not input_path.is_file():
         raise FileNotFoundError(f"Nu găsesc fișierul de intrare: {input_path}")
+
+    normalized_book_map: dict[str, str] = {}
+    for title, osis_id in book_map.items():
+        key = normalize_book_key(title)
+        previous = normalized_book_map.get(key)
+        if previous is not None and previous != osis_id:
+            raise ValueError(
+                f"Mapare ambiguă pentru titlul {title!r}: {previous} / {osis_id}"
+            )
+        normalized_book_map[key] = osis_id
 
     lines = input_path.read_text(encoding="utf-8-sig").splitlines()
     output: list[str] = [f'    <div type="bookGroup" subType="{subtype}">']
@@ -134,11 +172,14 @@ def convert_testament(
     current_chapter: int | None = None
     book_open = False
     chapter_open = False
+    skip_content = False
 
     books = chapters = verses = section_titles = 0
+    warnings = skipped_lines = 0
     seen_books: set[str] = set()
     seen_chapters: set[str] = set()
     seen_verses: set[str] = set()
+    warned_unknown_books: set[str] = set()
 
     def close_chapter() -> None:
         nonlocal chapter_open
@@ -156,6 +197,15 @@ def convert_testament(
         current_book_osis = None
         current_chapter = None
 
+    def handle_problem(line_number: int, message: str) -> None:
+        nonlocal warnings, skipped_lines
+        full_message = f"{input_path}:{line_number}: {message}"
+        if not lenient:
+            raise ValueError(full_message)
+        warnings += 1
+        skipped_lines += 1
+        emit_warning(input_path, line_number, message)
+
     for line_number, raw_line in enumerate(lines, start=1):
         line = normalize_text(raw_line)
         if not line:
@@ -165,21 +215,33 @@ def convert_testament(
         if chapter_match:
             book_title = normalize_text(chapter_match.group(1))
             chapter_number = int(chapter_match.group(2))
+            book_key = normalize_book_key(book_title)
+            new_book_osis = normalized_book_map.get(book_key)
 
-            if book_title not in book_map:
-                raise ValueError(
-                    f"{input_path}:{line_number}: carte necunoscută pentru maparea OSIS: "
-                    f"{book_title!r}"
-                )
-
-            new_book_osis = book_map[book_title]
+            if new_book_osis is None:
+                close_book()
+                skip_content = True
+                if book_key not in warned_unknown_books:
+                    warned_unknown_books.add(book_key)
+                    handle_problem(
+                        line_number,
+                        f"carte necunoscută pentru maparea OSIS: {book_title!r}; "
+                        "cartea va fi omisă până la următorul antet recunoscut",
+                    )
+                else:
+                    skipped_lines += 1
+                continue
 
             if current_book_osis != new_book_osis:
                 close_book()
                 if new_book_osis in seen_books:
-                    raise ValueError(
-                        f"{input_path}:{line_number}: carte repetată: {new_book_osis}"
+                    skip_content = True
+                    handle_problem(
+                        line_number,
+                        f"carte repetată: {new_book_osis}; apariția repetată va fi omisă",
                     )
+                    continue
+
                 seen_books.add(new_book_osis)
                 books += 1
                 current_book_title = book_title
@@ -194,11 +256,17 @@ def convert_testament(
             current_chapter = chapter_number
             chapter_id = f"{current_book_osis}.{current_chapter}"
             if chapter_id in seen_chapters:
-                raise ValueError(
-                    f"{input_path}:{line_number}: capitol repetat: {chapter_id}"
+                current_chapter = None
+                skip_content = True
+                handle_problem(
+                    line_number,
+                    f"capitol repetat: {chapter_id}; capitolul repetat va fi omis",
                 )
+                continue
+
             seen_chapters.add(chapter_id)
             chapters += 1
+            skip_content = False
             output.append(f'        <chapter osisID="{chapter_id}">')
             output.append(
                 f'          <title type="chapter">'
@@ -207,11 +275,17 @@ def convert_testament(
             chapter_open = True
             continue
 
+        if skip_content:
+            skipped_lines += 1
+            continue
+
         if line.startswith('"') and line.endswith('"'):
             if not current_book_osis or current_chapter is None:
-                raise ValueError(
-                    f"{input_path}:{line_number}: subtitlu găsit înaintea unui capitol"
+                handle_problem(
+                    line_number,
+                    "subtitlu găsit înaintea unui capitol; linia va fi omisă",
                 )
+                continue
             subtitle = normalize_text(line[1:-1])
             output.append(
                 f'          <title type="section">{xml_escape(subtitle)}</title>'
@@ -222,17 +296,22 @@ def convert_testament(
         verse_match = VERSE_RE.match(line)
         if verse_match:
             if not current_book_osis or current_chapter is None:
-                raise ValueError(
-                    f"{input_path}:{line_number}: verset găsit înaintea unui capitol: {line!r}"
+                handle_problem(
+                    line_number,
+                    f"verset găsit înaintea unui capitol: {line!r}; linia va fi omisă",
                 )
+                continue
 
             verse_number = int(verse_match.group(1))
             verse_text = normalize_text(verse_match.group(2))
             verse_id = f"{current_book_osis}.{current_chapter}.{verse_number}"
             if verse_id in seen_verses:
-                raise ValueError(
-                    f"{input_path}:{line_number}: verset repetat: {verse_id}"
+                handle_problem(
+                    line_number,
+                    f"verset repetat: {verse_id}; versetul repetat va fi omis",
                 )
+                continue
+
             seen_verses.add(verse_id)
             verses += 1
             output.append(
@@ -241,8 +320,9 @@ def convert_testament(
             )
             continue
 
-        raise ValueError(
-            f"{input_path}:{line_number}: linie nerecunoscută: {line!r}"
+        handle_problem(
+            line_number,
+            f"linie nerecunoscută: {line!r}; linia va fi omisă",
         )
 
     close_book()
@@ -254,12 +334,29 @@ def convert_testament(
             f"(cărți={books}, capitole={chapters}, versete={verses})"
         )
 
-    return output, ConversionStats(books, chapters, verses, section_titles)
+    return output, ConversionStats(
+        books,
+        chapters,
+        verses,
+        section_titles,
+        warnings,
+        skipped_lines,
+    )
 
 
-def build_osis(vt_input: Path, nt_input: Path, output_path: Path) -> None:
-    vt_xml, vt_stats = convert_testament(vt_input, VT_BOOK_MAP, "x-VT")
-    nt_xml, nt_stats = convert_testament(nt_input, NT_BOOK_MAP, "x-NT")
+def build_osis(
+    vt_input: Path,
+    nt_input: Path,
+    output_path: Path,
+    *,
+    lenient: bool,
+) -> None:
+    vt_xml, vt_stats = convert_testament(
+        vt_input, VT_BOOK_MAP, "x-VT", lenient=lenient
+    )
+    nt_xml, nt_stats = convert_testament(
+        nt_input, NT_BOOK_MAP, "x-NT", lenient=lenient
+    )
 
     document = [
         '<?xml version="1.0" encoding="UTF-8"?>',
@@ -289,13 +386,27 @@ def build_osis(vt_input: Path, nt_input: Path, output_path: Path) -> None:
     print(
         "VT: "
         f"{vt_stats.books} cărți, {vt_stats.chapters} capitole, "
-        f"{vt_stats.verses} versete, {vt_stats.section_titles} subtitluri"
+        f"{vt_stats.verses} versete, {vt_stats.section_titles} subtitluri, "
+        f"{vt_stats.warnings} atenționări, {vt_stats.skipped_lines} linii omise"
     )
     print(
         "NT: "
         f"{nt_stats.books} cărți, {nt_stats.chapters} capitole, "
-        f"{nt_stats.verses} versete, {nt_stats.section_titles} subtitluri"
+        f"{nt_stats.verses} versete, {nt_stats.section_titles} subtitluri, "
+        f"{nt_stats.warnings} atenționări, {nt_stats.skipped_lines} linii omise"
     )
+
+    total_warnings = vt_stats.warnings + nt_stats.warnings
+    total_skipped = vt_stats.skipped_lines + nt_stats.skipped_lines
+    if total_warnings:
+        summary = (
+            f"Conversia TXT → OSIS s-a încheiat cu {total_warnings} atenționări "
+            f"și {total_skipped} linii omise. Verifică txt-to-osis.log."
+        )
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::warning::{summary}", file=sys.stderr)
+        else:
+            print(f"ATENȚIONARE: {summary}", file=sys.stderr)
 
 
 def parse_args() -> argparse.Namespace:
@@ -305,13 +416,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vt-input", type=Path, required=True)
     parser.add_argument("--nt-input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--lenient",
+        action="store_true",
+        help=(
+            "Transformă erorile punctuale de conținut în atenționări și omite "
+            "liniile/cărțile problematice. Erorile structurale majore rămân fatale."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        build_osis(args.vt_input, args.nt_input, args.output)
+        build_osis(
+            args.vt_input,
+            args.nt_input,
+            args.output,
+            lenient=args.lenient,
+        )
     except (OSError, ValueError) as exc:
         print(f"EROARE: {exc}", file=sys.stderr)
         return 1
