@@ -1,11 +1,12 @@
-name: Build and release SWORD on XML update
+name: Build and release SWORD from TXT sources
 
 on:
   push:
     branches:
       - main
     paths:
-      - sources/biblia.xml
+      - sources/Vechiul_Testament_UTF8.txt
+      - sources/Noul_Testament_UTF8.txt
 
   workflow_dispatch:
     inputs:
@@ -31,7 +32,10 @@ permissions:
 env:
   MODULE_ID: ROOrthodox_exp
   MODULE_SLUG: roorthodox_exp
-  XML_PATH: sources/biblia.xml
+  VT_TXT_PATH: sources/Vechiul_Testament_UTF8.txt
+  NT_TXT_PATH: sources/Noul_Testament_UTF8.txt
+  OSIS_BUILDER_PATH: scripts/build_biblia_osis.py
+  XML_PATH: build/generated/biblia.xml
   MODULE_CONF_PATH: mods.d/roorthodox_exp.conf
   SWORD_ROOT: build/sword
   LOG_DIR: build/logs
@@ -52,6 +56,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
       - name: Install build tools
         run: |
           sudo apt-get update
@@ -63,15 +72,19 @@ jobs:
 
       - name: Validate sources and configuration
         run: |
-          test -f "$XML_PATH" || {
-            echo "Missing XML file: $XML_PATH"
-            exit 1
-          }
+          for REQUIRED_FILE in \
+            "$VT_TXT_PATH" \
+            "$NT_TXT_PATH" \
+            "$OSIS_BUILDER_PATH" \
+            "$MODULE_CONF_PATH"
+          do
+            test -f "$REQUIRED_FILE" || {
+              echo "Missing required file: $REQUIRED_FILE"
+              exit 1
+            }
+          done
 
-          test -f "$MODULE_CONF_PATH" || {
-            echo "Missing module conf file: $MODULE_CONF_PATH"
-            exit 1
-          }
+          python -m py_compile "$OSIS_BUILDER_PATH"
 
           FIRST_LINE="$(head -n 1 "$MODULE_CONF_PATH" | tr -d '\r')"
           EXPECTED_DATA_PATH="DataPath=./modules/texts/ztext/${MODULE_SLUG}/"
@@ -99,35 +112,12 @@ jobs:
             exit 1
           fi
 
-          xmllint --noout "$XML_PATH"
-
           {
             echo "MODULE_VERSION=$MODULE_VERSION"
             echo "RELEASE_TAG=v$MODULE_VERSION"
             echo "MODULE_DATA_PATH=$SWORD_ROOT/modules/texts/ztext/$MODULE_SLUG"
             echo "CONF_TARGET=$SWORD_ROOT/mods.d/$MODULE_SLUG.conf"
           } >> "$GITHUB_ENV"
-
-      - name: Read module version
-        run: |
-          MODULE_VERSION="$(
-            sed -n 's/^Version=//p' "$MODULE_CONF_PATH" |
-            head -n 1 |
-            tr -d '\r'
-          )"
-
-          if [ -z "$MODULE_VERSION" ]; then
-            echo "::error::Version is missing from $MODULE_CONF_PATH"
-            exit 1
-          fi
-
-          RELEASE_TAG="v${MODULE_VERSION}"
-
-          echo "MODULE_VERSION=$MODULE_VERSION" >> "$GITHUB_ENV"
-          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
-
-          echo "Module version: $MODULE_VERSION"
-          echo "Release tag: $RELEASE_TAG"
 
       - name: Check release version policy
         id: release_policy
@@ -149,7 +139,7 @@ jobs:
 
           if [ "$EVENT_NAME" = "push" ]; then
             echo "::error::Release $RELEASE_TAG already exists."
-            echo "::error::Increase Version= in $MODULE_CONF_PATH before pushing the XML."
+            echo "::error::Increase Version= in $MODULE_CONF_PATH before pushing TXT changes."
             exit 1
           fi
 
@@ -165,7 +155,21 @@ jobs:
       - name: Prepare build folders
         run: |
           rm -rf build
-          mkdir -p "$MODULE_DATA_PATH" "$SWORD_ROOT/mods.d" "$LOG_DIR"
+          mkdir -p \
+            build/generated \
+            "$SWORD_ROOT/mods.d" \
+            "$SWORD_ROOT/modules/texts/ztext/$MODULE_SLUG" \
+            "$LOG_DIR"
+
+      - name: Generate combined OSIS from TXT
+        run: |
+          python "$OSIS_BUILDER_PATH" \
+            --vt-input "$VT_TXT_PATH" \
+            --nt-input "$NT_TXT_PATH" \
+            --output "$XML_PATH" \
+            2>&1 | tee "$LOG_DIR/txt-to-osis.log"
+
+          xmllint --noout "$XML_PATH"
 
       - name: Build SWORD module
         run: |
@@ -247,12 +251,14 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload diagnostic logs
+      - name: Upload diagnostic files
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: sword-logs-${{ github.run_number }}-${{ github.run_attempt }}
-          path: ${{ env.LOG_DIR }}/
+          name: sword-diagnostics-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.LOG_DIR }}/
+            ${{ env.XML_PATH }}
           if-no-files-found: warn
           retention-days: 30
 
@@ -289,5 +295,5 @@ jobs:
             "build/$RELEASE_ARCHIVE.sha256" \
             --target "$GITHUB_SHA" \
             --title "Release $MODULE_VERSION" \
-            --notes "SWORD module generated automatically from sources/biblia.xml." \
+            --notes "SWORD module generated automatically from the UTF-8 TXT sources." \
             --latest
