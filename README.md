@@ -1,5 +1,7 @@
 # Orthodox Bible SWORD Builder
 
+![Logo Orthodox Bible SWORD Builder](assets/logo.png)
+
 Repository pentru sursele și automatizarea necesare construirii unui modul
 **SWORD** pentru Biblia Ortodoxă Română.
 
